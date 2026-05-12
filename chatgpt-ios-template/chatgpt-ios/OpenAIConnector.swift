@@ -14,7 +14,7 @@ import Combine
 class OpenAIConnector: ObservableObject {
     /// This URL might change in the future, so if you get an error, make sure to check the OpenAI API Reference.
     let openAIURL = URL(string: "https://api.openai.com/v1/chat/completions")
-    #error("Add your OpenAI API Key here. You can delete this error after.")
+
     let openAIKey = ""
     
     /// This is what stores your messages. You can see how to use it in a SwiftUI view here:
@@ -32,7 +32,7 @@ class OpenAIConnector: ObservableObject {
         
         let httpBody: [String: Any] = [
             /// In the future, you can use a different chat model here.
-            "model" : "gpt-3.5-turbo",
+            "model" : "gpt-4.1-2025-04-14",
             "messages" : messageLog
         ]
         
@@ -53,8 +53,26 @@ class OpenAIConnector: ObservableObject {
             let jsonStr = String(data: requestData, encoding: String.Encoding(rawValue: String.Encoding.utf8.rawValue))!
             print(jsonStr)
             let responseHandler = OpenAIResponseHandler()
-            logMessage((responseHandler.decodeJson(jsonString: jsonStr)?.choices[0].message["content"])!, messageUserType: .assistant)
-
+            if let decoded = responseHandler.decodeJson(jsonString: jsonStr) {
+                if let firstChoice = decoded.choices.first,
+                   let content = firstChoice.message["content"] {
+                    logMessage(content, messageUserType: .assistant)
+                } else {
+                    // choices is empty or content missing
+                    logMessage("No content returned from assistant.", messageUserType: .assistant)
+                    print("Warning: Decoded response has no choices or missing content: \(decoded)")
+                }
+            } else {
+                // Try to surface API error payloads if present
+                if let data = jsonStr.data(using: .utf8),
+                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                   let errorDict = json["error"] as? [String: Any],
+                   let message = errorDict["message"] as? String {
+                    logMessage("API error: \(message)", messageUserType: .assistant)
+                } else {
+                    logMessage("Failed to decode response.", messageUserType: .assistant)
+                }
+            }
         }
 
         
@@ -118,3 +136,4 @@ extension OpenAIConnector {
         case assistant
     }
 }
+
