@@ -9,6 +9,25 @@
 import Foundation
 import Combine
 
+// Minimal models for decoding OpenAI chat responses
+private struct ChatCompletionResponse: Decodable {
+    struct Choice: Decodable {
+        struct Message: Decodable {
+            let role: String
+            let content: String?
+        }
+        let index: Int?
+        let message: Message
+    }
+    let id: String?
+    let choices: [Choice]
+}
+
+private struct OpenAIErrorResponse: Decodable {
+    struct APIError: Decodable { let message: String }
+    let error: APIError
+}
+
 //
 
 class OpenAIConnector: ObservableObject {
@@ -31,9 +50,9 @@ class OpenAIConnector: ObservableObject {
         request.addValue("Bearer \(self.openAIKey)", forHTTPHeaderField: "Authorization")
         
         let httpBody: [String: Any] = [
-            /// In the future, you can use a different chat model here.
-            "model" : "gpt-4.1-2025-04-14",
-            "messages" : messageLog
+            "model" : "gpt-4o-mini",
+            "messages" : messageLog,
+            "temperature": 0.7
         ]
         
         /// DON'T TOUCH THIS
@@ -52,26 +71,26 @@ class OpenAIConnector: ObservableObject {
         if let requestData = executeRequest(request: request, withSessionConfig: nil) {
             let jsonStr = String(data: requestData, encoding: String.Encoding(rawValue: String.Encoding.utf8.rawValue))!
             print(jsonStr)
-            let responseHandler = OpenAIResponseHandler()
-            if let decoded = responseHandler.decodeJson(jsonString: jsonStr) {
-                if let firstChoice = decoded.choices.first,
-                   let content = firstChoice.message["content"] {
-                    logMessage(content, messageUserType: .assistant)
+            // Try to decode a successful chat completion
+            if let data = jsonStr.data(using: .utf8) {
+                if let completion = try? JSONDecoder().decode(ChatCompletionResponse.self, from: data),
+                   let first = completion.choices.first {
+                    if let content = first.message.content, !content.isEmpty {
+                        logMessage(content, messageUserType: .assistant)
+                    } else {
+                        logMessage("No content returned from assistant.", messageUserType: .assistant)
+                        print("Warning: message content missing in first choice: \(completion)")
+                    }
+                } else if let apiError = try? JSONDecoder().decode(OpenAIErrorResponse.self, from: data) {
+                    logMessage("API error: \(apiError.error.message)", messageUserType: .assistant)
                 } else {
-                    // choices is empty or content missing
-                    logMessage("No content returned from assistant.", messageUserType: .assistant)
-                    print("Warning: Decoded response has no choices or missing content: \(decoded)")
-                }
-            } else {
-                // Try to surface API error payloads if present
-                if let data = jsonStr.data(using: .utf8),
-                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                   let errorDict = json["error"] as? [String: Any],
-                   let message = errorDict["message"] as? String {
-                    logMessage("API error: \(message)", messageUserType: .assistant)
-                } else {
+                    // Log a short preview of the raw payload to help debugging
+                    let preview = jsonStr.count > 500 ? String(jsonStr.prefix(500)) + "…" : jsonStr
+                    print("Unhandled response payload preview: \n\(preview)")
                     logMessage("Failed to decode response.", messageUserType: .assistant)
                 }
+            } else {
+                logMessage("Failed to decode response.", messageUserType: .assistant)
             }
         }
 
